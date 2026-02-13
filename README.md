@@ -40,24 +40,7 @@ A few important inline comments (not spam)
 
 Save everything for audit & tracking
 
-What it will NOT do (for now)
 
-❌ Auto-merge PRs
-❌ Push code changes automatically
-❌ Replace security scanners (SAST)
-
-Core behavior (think like a flow)
-PR event happens
-↓
-Fetch PR data + diff
-↓
-Break code into small chunks
-↓
-Decide which AI reviewers to run
-↓
-AI reviewers find issues
-↓
-Merge + clean results
 ↓
 Post comments on GitHub
 ↓
