@@ -11,6 +11,7 @@ IGNORE_PATTERNS = [
     r"\.png$", r"\.jpg$", r"\.jpeg$", r"\.gif$", r"\.svg$", r"\.pdf$",
     r"migrations/.*\.py$", r"__pycache__/",
     r"requirements\.txt$", r"\.txt$",
+    r"^\.env$", r"\.env\.",
 ]
 
 MAX_CHUNK_CHARS = 4000

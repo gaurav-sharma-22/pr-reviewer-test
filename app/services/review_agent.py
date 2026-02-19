@@ -115,10 +115,16 @@ async def review_diff(diff: str, pr_title: str) -> dict:
     if not tasks:
         return {"summary": "No reviewable code changes found.", "risk": "low", "issues": [], "checklist": [], "_chunks_count": len(chunks)}
 
-    logger.info(f"[review_agent] Running {len(tasks)} agent-chunk tasks in parallel")
+    logger.info(f"[review_agent] Running {len(tasks)} agent-chunk tasks (max 5 concurrent)")
+
+    semaphore = asyncio.Semaphore(5)
+
+    async def _limited(agent_name, chunk):
+        async with semaphore:
+            return await _run_agent(client, agent_name, chunk, pr_title)
 
     results = await asyncio.gather(
-        *[_run_agent(client, agent_name, chunk, pr_title) for agent_name, chunk in tasks]
+        *[_limited(agent_name, chunk) for agent_name, chunk in tasks]
     )
 
     final = _aggregate(list(results), len(chunks))
