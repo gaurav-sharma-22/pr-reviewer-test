@@ -117,6 +117,26 @@ async def update_pr_comment(repo: str, comment_id: int, body: str, token: str) -
         logger.info(f"[github_client] Updated existing comment {comment_id} on {repo}")
 
 
+async def get_commit_diff(repo: str, base_sha: str, head_sha: str, token: str) -> str:
+    """Fetch diff between two commits (incremental review)."""
+    url = f"https://api.github.com/repos/{repo}/compare/{base_sha}...{head_sha}"
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github.diff",
+            },
+        )
+        response.raise_for_status()
+        logger.info(
+            f"[github_client] Fetched incremental diff {base_sha[:8]}...{head_sha[:8]} "
+            f"for {repo} ({len(response.text)} chars)"
+        )
+        return response.text
+
+
 async def upsert_pr_comment(repo: str, pr_number: int, body: str, token: str) -> None:
     existing_comment_id = await find_bot_comment(repo, pr_number, token)
     if existing_comment_id:

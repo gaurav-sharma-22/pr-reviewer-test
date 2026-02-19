@@ -21,6 +21,20 @@ def get_db():
     return _db
 
 
+async def get_last_reviewed_sha(repo: str, pr_number: int) -> Optional[str]:
+    """Return the commit SHA of the last successful review for this PR, or None."""
+    db = get_db()
+    doc = await db["review_runs"].find_one(
+        {"repo": repo, "pr_number": pr_number, "status": "success"},
+        sort=[("ended_at", -1)],
+    )
+    if doc and doc.get("commit_sha"):
+        sha = doc["commit_sha"]
+        logger.info(f"[audit_logger] Last reviewed SHA for {repo}#{pr_number}: {sha[:8]}")
+        return sha
+    return None
+
+
 async def log_review_run(
     repo: str,
     pr_number: int,
@@ -33,6 +47,8 @@ async def log_review_run(
     status: str,
     started_at: datetime,
     ended_at: datetime,
+    commit_sha: Optional[str] = None,
+    review_mode: str = "full",
     error: Optional[str] = None,
 ) -> str:
     db = get_db()
@@ -42,9 +58,14 @@ async def log_review_run(
         "action": action, "diff_size_chars": diff_size, "chunks_count": chunks_count,
         "issues_found": issues_found, "risk": risk, "status": status,
         "duration_ms": duration_ms, "started_at": started_at,
-        "ended_at": ended_at, "error": error,
+        "ended_at": ended_at, "commit_sha": commit_sha,
+        "review_mode": review_mode, "error": error,
     }
     result = await db["review_runs"].insert_one(doc)
     run_id = str(result.inserted_id)
-    logger.info(f"[audit_logger] Logged review run {run_id} | repo={repo} pr=#{pr_number} status={status} issues={issues_found} risk={risk} duration={duration_ms}ms")
+    logger.info(
+        f"[audit_logger] Logged review run {run_id} | "
+        f"repo={repo} pr=#{pr_number} mode={review_mode} "
+        f"status={status} issues={issues_found} risk={risk} duration={duration_ms}ms"
+    )
     return run_id

@@ -132,16 +132,17 @@ async def review_diff(diff: str, pr_title: str) -> dict:
     return final
 
 
-def format_review_comment(review: dict, pr_number: int) -> str:
+def format_review_comment(review: dict, pr_number: int, review_mode: str = "full") -> str:
     risk_emoji = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(review.get("risk", "unknown"), "⚪")
     severity_emoji = {"low": "🔵", "medium": "🟡", "high": "🔴"}
     category_emoji = {"security": "🔐", "bug": "🐛", "maintainability": "🔧", "performance": "⚡", "tests": "🧪"}
+    mode_label = "🔁 Incremental Review" if review_mode == "incremental" else "🔍 Full Review"
 
     lines = [
         BOT_COMMENT_MARKER,
         f"## 🤖 Agentic PR Reviewer — PR #{pr_number}",
         f"",
-        f"{risk_emoji} **Risk:** {review.get('risk', 'unknown').upper()}",
+        f"{risk_emoji} **Risk:** {review.get('risk', 'unknown').upper()} · {mode_label}",
         f"",
         f"**Summary:** {review.get('summary', 'N/A')}",
         f"",
