@@ -1,4 +1,8 @@
 import logging
+from datetime import datetime, timezone
+from app.services.github_client import get_installation_token, get_pr_diff, upsert_pr_comment
+from app.services.review_agent import review_diff, format_review_comment
+from app.services.audit_logger import log_review_run
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +36,66 @@ async def handle_pull_request_event(payload: dict) -> None:
         logger.info(f"[pull_request] Ignoring action '{action}' — not in handled set {HANDLED_PR_ACTIONS}")
         return
 
-    logger.info(f"[pull_request] ✅ Accepted — proceeding to fetch diff & review for PR #{pr_number}")
+    logger.info(f"[pull_request] ✅ Accepted — starting review for PR #{pr_number}")
 
-    # TODO: fetch diff, run review, post comment
+    started_at = datetime.now(timezone.utc)
+    diff_size = 0
+    chunks_count = 0
+    issues_found = 0
+    risk = "unknown"
+
+    try:
+        # Step 1: Get access token
+        token = await get_installation_token()
+
+        # Step 2: Fetch the diff
+        diff = await get_pr_diff(repo_name, pr_number, token)
+        diff_size = len(diff)
+        logger.info(f"[pull_request] Diff fetched — {diff_size} chars")
+
+        # Step 3: Run review agent (handles chunking internally)
+        review = await review_diff(diff, pr_title)
+        chunks_count = review.get("_chunks_count", 1)
+        issues_found = len(review.get("issues", []))
+        risk = review.get("risk", "unknown")
+
+        # Step 4: Format and upsert comment
+        comment = format_review_comment(review, pr_number)
+        await upsert_pr_comment(repo_name, pr_number, comment, token)
+        logger.info(f"[pull_request] ✅ Review upserted on PR #{pr_number}")
+
+        # Step 5: Audit log — success
+        ended_at = datetime.now(timezone.utc)
+        await log_review_run(
+            repo=repo_name,
+            pr_number=pr_number,
+            pr_title=pr_title,
+            action=action,
+            diff_size=diff_size,
+            chunks_count=chunks_count,
+            issues_found=issues_found,
+            risk=risk,
+            status="success",
+            started_at=started_at,
+            ended_at=ended_at,
+        )
+
+    except Exception as e:
+        ended_at = datetime.now(timezone.utc)
+        logger.error(f"[pull_request] ❌ Failed to process PR #{pr_number}: {e}", exc_info=True)
+
+        # Audit log — failure
+        await log_review_run(
+            repo=repo_name,
+            pr_number=pr_number,
+            pr_title=pr_title,
+            action=action,
+            diff_size=diff_size,
+            chunks_count=chunks_count,
+            issues_found=issues_found,
+            risk=risk,
+            status="failed",
+            started_at=started_at,
+            ended_at=ended_at,
+            error=str(e),
+        )
