@@ -11,3 +11,4 @@ idempotency final test Thu Feb 19 12:18:52 IST 2026
 test chunking Thu Feb 19 12:21:22 IST 2026
 test audit logging Thu Feb 19 12:31:51 IST 2026
 test parallel chunks Thu Feb 19 12:39:40 IST 2026
+test specialist agents Thu Feb 19 12:51:07 IST 2026
