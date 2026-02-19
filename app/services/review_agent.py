@@ -1,12 +1,15 @@
 import os
 import json
 import logging
+import asyncio
 from groq import AsyncGroq
 from typing import List
 
 logger = logging.getLogger(__name__)
 
 BOT_COMMENT_MARKER = "<!-- agentic-pr-reviewer -->"
+
+MAX_TOTAL_ISSUES = 10
 
 SYSTEM_PROMPT = """You are an expert code reviewer. Analyze the given PR diff chunk and return a JSON review.
 
@@ -57,7 +60,6 @@ async def _review_chunk(client: AsyncGroq, chunk: dict, pr_title: str) -> dict:
 
     raw = response.choices[0].message.content.strip()
 
-    # Strip markdown code fences if model adds them
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -71,7 +73,7 @@ async def _review_chunk(client: AsyncGroq, chunk: dict, pr_title: str) -> dict:
         return {"summary": "", "risk": "low", "issues": [], "checklist": []}
 
 
-def _merge_reviews(chunk_reviews: List[dict]) -> dict:
+def _merge_reviews(chunk_reviews: List[dict], chunks_count: int) -> dict:
     """Merge findings from multiple chunk reviews into one."""
     all_issues = []
     all_checklist_items = set()
@@ -93,7 +95,7 @@ def _merge_reviews(chunk_reviews: List[dict]) -> dict:
         for item in review.get("checklist", []):
             all_checklist_items.add(item)
 
-    # Deduplicate issues by title+file (same issue caught in overlapping chunks)
+    # Deduplicate by title+file
     seen = set()
     deduped_issues = []
     for issue in all_issues:
@@ -106,16 +108,20 @@ def _merge_reviews(chunk_reviews: List[dict]) -> dict:
     severity_order = {"high": 0, "medium": 1, "low": 2}
     deduped_issues.sort(key=lambda x: severity_order.get(x.get("severity", "low"), 2))
 
+    # Cap at MAX_TOTAL_ISSUES — keep highest severity only
+    deduped_issues = deduped_issues[:MAX_TOTAL_ISSUES]
+
     return {
         "summary": " ".join(summaries) if summaries else "Review complete.",
         "risk": max_risk,
         "issues": deduped_issues,
         "checklist": list(all_checklist_items),
+        "_chunks_count": chunks_count,
     }
 
 
 async def review_diff(diff: str, pr_title: str) -> dict:
-    """Review a full PR diff, chunking if necessary."""
+    """Review a full PR diff, chunking and running reviews in parallel."""
     from app.services.chunker import chunk_diff
 
     client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
@@ -128,17 +134,17 @@ async def review_diff(diff: str, pr_title: str) -> dict:
             "risk": "low",
             "issues": [],
             "checklist": [],
+            "_chunks_count": 0,
         }
 
-    logger.info(f"[review_agent] Reviewing {len(chunks)} chunks for PR: '{pr_title}'")
+    logger.info(f"[review_agent] Reviewing {len(chunks)} chunks in parallel for PR: '{pr_title}'")
 
-    chunk_reviews = []
-    for chunk in chunks:
-        logger.info(f"[review_agent] Reviewing chunk {chunk['chunk_id']} ({chunk['size']} chars)")
-        review = await _review_chunk(client, chunk, pr_title)
-        chunk_reviews.append(review)
+    # Run all chunk reviews concurrently
+    chunk_reviews = await asyncio.gather(
+        *[_review_chunk(client, chunk, pr_title) for chunk in chunks]
+    )
 
-    merged = _merge_reviews(chunk_reviews)
+    merged = _merge_reviews(list(chunk_reviews), len(chunks))
     logger.info(
         f"[review_agent] Merged review: {len(merged['issues'])} issues, risk={merged['risk']}"
     )
@@ -182,7 +188,7 @@ def format_review_comment(review: dict, pr_number: int) -> str:
     if checklist:
         lines.append("### 📋 Checklist")
         lines.append("")
-        for item in checklist:
+        for item in sorted(checklist):
             lines.append(f"- [ ] {item}")
         lines.append("")
 
