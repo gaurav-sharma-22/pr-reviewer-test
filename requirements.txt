@@ -1,3 +1,25 @@
+# Web framework
 fastapi
-uvicorn
+uvicorn[standard]
+
+# MCP server
+fastmcp
+
+# HTTP client (GitHub API calls)
+httpx
+
+# MongoDB async driver
+motor
+
+# Azure OpenAI
+openai
+
+# GitHub App auth (RS256 JWT signing)
+PyJWT[crypto]
+cryptography
+
+# Environment variables
 python-dotenv
+
+# Data validation (FastAPI models)
+pydantic[email]

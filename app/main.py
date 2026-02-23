@@ -4,6 +4,7 @@ load_dotenv()
 import logging
 from fastapi import FastAPI
 from app.api.webhooks import router as webhook_router
+from app.api.config_routes import router as config_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Agentic PR Reviewer")
 app.include_router(webhook_router, prefix="/webhooks")
-
+app.include_router(config_router, prefix="/config")
 
 
 @app.on_event("startup")

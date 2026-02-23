@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import asyncio
-from groq import AsyncGroq
+from openai import AsyncAzureOpenAI
 from typing import List
 
 from app.services.agents.security import SECURITY_SYSTEM_PROMPT
@@ -24,13 +24,13 @@ AGENT_PROMPTS = {
 }
 
 
-async def _run_agent(client: AsyncGroq, agent_name: str, chunk: dict, pr_title: str) -> dict:
+async def _run_agent(client: AsyncAzureOpenAI, agent_name: str, chunk: dict, pr_title: str) -> dict:
     system_prompt = AGENT_PROMPTS[agent_name]
     user_message = f"PR Title: {pr_title}\nFile: {chunk['file']}\n\nDiff:\n{chunk['content']}"
 
     try:
         response = await client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o"),
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
@@ -52,7 +52,7 @@ async def _run_agent(client: AsyncGroq, agent_name: str, chunk: dict, pr_title: 
         return {"agent": agent_name, "issues": []}
 
 
-def _aggregate(all_results: List[dict], chunks_count: int) -> dict:
+def _aggregate(all_results: List[dict], chunks_count: int, max_issues: int = MAX_TOTAL_ISSUES) -> dict:
     all_issues = []
     risk_order = {"low": 0, "medium": 1, "high": 2}
     max_risk = "low"
@@ -74,7 +74,7 @@ def _aggregate(all_results: List[dict], chunks_count: int) -> dict:
 
     severity_order = {"high": 0, "medium": 1, "low": 2}
     deduped.sort(key=lambda x: severity_order.get(x.get("severity", "low"), 2))
-    deduped = deduped[:MAX_TOTAL_ISSUES]
+    deduped = deduped[:max_issues]
 
     checklist = [f"Fix: {i.get('title', '')}" for i in deduped if i.get("severity") in {"high", "medium"}]
 
@@ -99,16 +99,21 @@ def _aggregate(all_results: List[dict], chunks_count: int) -> dict:
     }
 
 
-async def review_diff(diff: str, pr_title: str) -> dict:
+async def review_diff(diff: str, pr_title: str, config: dict = None) -> dict:
     from app.services.chunker import chunk_diff
 
-    client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
+    cfg = config or {}
+    client = AsyncAzureOpenAI(
+        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", "https://aiwing.openai.azure.com"),
+        api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview"),
+    )
     chunks = chunk_diff(diff)
 
     if not chunks:
         return {"summary": "No reviewable code changes found.", "risk": "low", "issues": [], "checklist": [], "_chunks_count": 0}
 
-    plan = plan_agents(chunks)
+    plan = plan_agents(chunks, active_agents=cfg.get("agents"))
 
     tasks = [(agent_name, chunk) for agent_name, agent_chunks in plan.items() for chunk in agent_chunks]
 
@@ -127,9 +132,29 @@ async def review_diff(diff: str, pr_title: str) -> dict:
         *[_limited(agent_name, chunk) for agent_name, chunk in tasks]
     )
 
-    final = _aggregate(list(results), len(chunks))
+    final = _aggregate(list(results), len(chunks), max_issues=cfg.get("max_issues", MAX_TOTAL_ISSUES))
     logger.info(f"[review_agent] Final: {len(final['issues'])} issues, risk={final['risk']}")
     return final
+
+
+INLINE_COMMENT_MARKER = "<!-- agentic-pr-reviewer -->"
+
+
+def format_inline_comment(issue: dict) -> str:
+    severity_emoji = {"low": "🔵", "medium": "🟡", "high": "🔴"}.get(issue.get("severity", "low"), "🔵")
+    category_emoji = {"security": "🔐", "bug": "🐛", "maintainability": "🔧", "performance": "⚡", "tests": "🧪"}.get(issue.get("category", ""), "📌")
+    sev = issue.get("severity", "low").upper()
+    lines = [
+        INLINE_COMMENT_MARKER,
+        f"{severity_emoji} **[{sev}] {category_emoji} {issue.get('title', 'Issue')}**",
+        "",
+        f"**What:** {issue.get('explanation', '')}",
+        "",
+        f"**Fix:** {issue.get('suggestion', '')}",
+        "",
+        "_— Agentic PR Reviewer_",
+    ]
+    return "\n".join(lines)
 
 
 def format_review_comment(review: dict, pr_number: int, review_mode: str = "full") -> str:
