@@ -8,39 +8,35 @@ from app.services.event_handler import handle_github_event
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# Events we care about — all others are acknowledged but not processed
+HANDLED_EVENTS = {"pull_request", "issue_comment", "ping"}
+
 
 @router.post("/github")
 async def github_webhook(
     request: Request,
-    x_github_event: Optional[str] = Header(
-        default=None,
-        alias="X-GitHub-Event"
-    ),
-    x_hub_signature_256: Optional[str] = Header(
-        default=None,
-        alias="X-Hub-Signature-256"
-    ),
+    x_github_event: Optional[str] = Header(default=None, alias="X-GitHub-Event"),
+    x_hub_signature_256: Optional[str] = Header(default=None, alias="X-Hub-Signature-256"),
 ):
     body = await request.body()
     payload = await request.json()
 
-    logger.warning(f"EVENT HEADER VALUE = {x_github_event}")
+    event = x_github_event or "unknown"
+    logger.info(f"[webhook] Received event header: '{event}'")
 
-    # ✅ 1. ALWAYS accept ping (NO signature)
-    if x_github_event == "ping":
-        logger.warning("PING RECEIVED — BYPASSING ALL AUTH")
+    # Always accept ping without signature check
+    if event == "ping":
+        logger.info("[webhook] Ping received — responding pong")
         return {"status": "pong"}
 
-    # ✅ 2. Verify signature ONLY for real events
+    # Verify signature for all real events
     try:
         verify_github_signature(body, x_hub_signature_256)
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
 
-    # ✅ 3. Process event
-    await handle_github_event(
-        event_type=x_github_event,
-        payload=payload
-    )
+    logger.info(f"[webhook] Signature verified. Dispatching event: '{event}'")
+
+    await handle_github_event(event_type=event, payload=payload)
 
     return {"status": "ok"}
